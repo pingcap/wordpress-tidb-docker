@@ -1,0 +1,16 @@
+version: "3"
+services:
+  wordpress:
+    image: wordpress
+    ports:
+      - 8080:80
+    environment:
+      WORDPRESS_DB_HOST: '${TIDB_HOST}:${TIDB_PORT}'
+      WORDPRESS_DB_NAME: '${TIDB_DB_NAME}'
+      WORDPRESS_DB_PASSWORD: '${TIDB_PASSWORD}'
+      WORDPRESS_DB_USER: '${TIDB_USER}'
+      WORDPRESS_DB_COLLATE: 'utf8mb4_bin'
+      WORDPRESS_CONFIG_EXTRA: |
+        define('MYSQL_CLIENT_FLAGS', MYSQLI_CLIENT_SSL);
+        define('MYSQL_SSL_CA', '/etc/ssl/certs/ca-certificates.crt');
+        define('DB_COLLATE', 'utf8mb4_bin');
