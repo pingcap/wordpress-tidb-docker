@@ -2,8 +2,11 @@ version: "3"
 services:
   wordpress:
     image: wordpress
+    volumes:
+      - "./patch.php:/var/www/html/patch.php"
+      - "./apply-patch.sh:/var/www/html/apply-patch.sh"
     ports:
-      - 8080:80
+      - 8200:80
     environment:
       WORDPRESS_DB_HOST: '${TIDB_HOST}:${TIDB_PORT}'
       WORDPRESS_DB_NAME: '${TIDB_DB_NAME}'
