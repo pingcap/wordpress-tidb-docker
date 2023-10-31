@@ -1,3 +1,3 @@
 [submodule "wordpress-tidb-compatibility-plugin"]
 	path = wordpress-tidb-compatibility-plugin
-	url = git@github.com:it2911/wordpress-tidb-compatibility-plugin.git
+	url = https://github.com/it2911/wordpress-tidb-compatibility-plugin.git
