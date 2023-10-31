@@ -16,6 +16,7 @@ sudo sh install.sh
 
 ## Usage
 
+- Clone this repository with submodule `git clone --recurse-submodules https://github.com/Icemap/wordpress-tidb-docker.git`.
 - Run `cp .env.example .env`.
 - Change the properties in `.env` to match your TiDB Serverless Tier cluster information.
 
