@@ -23,7 +23,7 @@ sudo sh install.sh
   - Select **General** in the **Connect With** dropdown list.
   - Copy and paste the connection infomation into the `.env` file. By default, your TiDB Serverless comes with a `test` DB. You could change the value `TIDB_DB_NAME` to the DB you've created in your TiDB Serverless.
 
-- Run `sudo sh start.sh`.
+- Run `docker compose up -d`.
 - That's it! You can now initialize the WordPress site by going to the [localhost page](http://localhost).
 
 ## Stop & Clean

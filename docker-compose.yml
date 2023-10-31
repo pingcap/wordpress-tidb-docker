@@ -3,8 +3,7 @@ services:
   wordpress:
     image: wordpress
     volumes:
-      - "./patch.php:/var/www/html/patch.php"
-      - "./apply-patch.sh:/var/www/html/apply-patch.sh"
+      - "./wordpress-tidb-compatibility-plugin/tidb-compatibility/tidb-compatibility.php:/var/www/html/wp-content/mu-plugins/tidb-compatibility.php"
     ports:
       - 80:80
     environment:
