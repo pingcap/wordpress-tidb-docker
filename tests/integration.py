@@ -166,6 +166,8 @@ def main():
             request('/wp-login.php?key=' + token, {'Cookie': 'secret=' + token, 'User-Agent': token})
             dc('exec', '-T', 'wordpress', 'php', '-r',
                'require "/opt/wordpress/wp-load.php"; do_action("wp_login_failed", "' + token + '");')
+            dc('exec', '-T', 'wordpress', 'php', '-r',
+               'require "/opt/wordpress/wp-load.php"; $wpdb->query("SELECT * FROM nonexistent_' + token + '");')
             logs = dc('logs', '--no-color').stdout
             assert token not in logs and password not in logs and admin_password not in logs, 'Sensitive data appeared in logs'
             assert 'admin_bootstrap' in logs and 'login_failure' in logs, 'Missing audit events'

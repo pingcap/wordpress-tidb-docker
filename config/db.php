@@ -4,6 +4,15 @@
 require_once '/opt/security/settings.php';
 require_once '/opt/security/db-connection.php';
 class TiDB_Verified_WPDB extends wpdb {
+    public function print_error($str = '') {
+        // wpdb's default logger includes complete SQL and database error strings,
+        // which can contain reset tokens, user content and credential material.
+        if (!$this->suppress_errors) {
+            error_log('wordpress_security: database query failed');
+        }
+        return false;
+    }
+
     public function db_connect($allow_bail = true) {
         $this->is_mysql = true;
         $this->ready = false;
