@@ -85,7 +85,7 @@ def main():
                 'tidb': {
                     'image': TIDB,
                     'command': ['--store=unistore', '--path=/tmp/tidb', '--host=0.0.0.0',
-                                '--config=/tls/tidb.toml', '--log-level=error'],
+                                '--config=/tls/tidb.toml', '-L=error'],
                     'volumes': ['./test-fixtures/server.key:/tls/server.key:ro',
                                 './test-fixtures/server.crt:/tls/server.crt:ro',
                                 './test-fixtures/ca.crt:/tls/ca.crt:ro',
@@ -232,7 +232,7 @@ def main():
             print('Installation, reconnect, HTTPS, immutable code, uploads, audit redaction and loopback binding passed.', flush=True)
         except BaseException:
             print(dc('ps', '--all', check=False).stdout, flush=True)
-            print(dc('logs', '--no-color', '--tail', '80', 'proxy', check=False).stdout, flush=True)
+            print(dc('logs', '--no-color', '--tail', '80', 'proxy', 'tidb', check=False).stdout, flush=True)
             raise
         finally:
             # This project and its volumes were created exclusively for this test.

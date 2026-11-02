@@ -11,7 +11,7 @@ function deployment_audit(string $event, int $target = 0): void {
         'actor_id' => function_exists('get_current_user_id') ? get_current_user_id() : 0,
         'target_id' => $target,
         'time' => gmdate('c'),
-    ], JSON_UNESCAPED_SLASHES) . PHP_EOL, 3, '/proc/self/fd/2');
+    ], JSON_UNESCAPED_SLASHES) . PHP_EOL, 3, 'php://stderr');
 }
 add_action('wp_install', function ($user) { deployment_audit('admin_bootstrap', (int)$user->ID); });
 add_action('wp_login', function ($name, $user) { deployment_audit('login_success', (int)$user->ID); }, 10, 2);
