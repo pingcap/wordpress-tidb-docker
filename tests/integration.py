@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real images using an isolated, disposable TLS MySQL fixture."""
 import json
+import http.cookiejar
 import os
 from pathlib import Path
 import secrets
@@ -12,6 +13,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 SOURCE = Path(__file__).resolve().parents[1]
 MYSQL = 'mysql:8.4@sha256:a0225d1ea6631c8bc2385dc4c2faba17bbf1834ecf369e1659a9a382bd8d5dd7'
@@ -135,6 +137,10 @@ def main():
             dc('exec', '-T', 'wordpress', 'php', '-r',
                'require "/opt/wordpress/wp-load.php"; '
                'if (!$wpdb->db_connect(false) || !is_blog_installed() || !class_exists("FIX_WP_SLOW_QUERY")) exit(1);')
+            dc('exec', '-T', 'wordpress', 'php', '-r',
+               'require "/opt/wordpress/wp-load.php"; wp_set_current_user(1); '
+               'if (!current_user_can("manage_options") || current_user_can("install_plugins") '
+               '|| current_user_can("edit_plugins") || current_user_can("edit_themes")) exit(1);')
             for attempt in range(30):
                 result = dc('cp', 'proxy:/data/caddy/pki/authorities/local/root.crt', str(fixture / 'local-ca.crt'), check=False)
                 if result.returncode == 0:
@@ -143,7 +149,9 @@ def main():
             else:
                 raise AssertionError('Proxy certificate unavailable: ' + result.stderr)
             context = ssl.create_default_context(cafile=str(fixture / 'local-ca.crt'))
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
+            cookies = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                       urllib.request.HTTPSHandler(context=context), urllib.request.HTTPCookieProcessor(cookies))
 
             def request(path, headers=None):
                 try:
@@ -154,6 +162,13 @@ def main():
 
             status, body = request('/wp-login.php')
             assert status == 200 and b'user_login' in body, 'WordPress login unavailable'
+            login_data = urllib.parse.urlencode({'log': 'fixtureadmin', 'pwd': admin_password,
+                         'wp-submit': 'Log In', 'testcookie': '1'}).encode()
+            with opener.open('https://localhost:8443/wp-login.php', data=login_data, timeout=10) as response:
+                assert response.status == 200
+            auth_cookies = [cookie for cookie in cookies if cookie.name.startswith('wordpress_logged_in_')]
+            assert auth_cookies and all(cookie.secure and cookie.has_nonstandard_attr('HttpOnly')
+                                        for cookie in auth_cookies), 'Missing protected login cookie'
             for path in ['/xmlrpc.php', '/wp-cron.php', '/wp-config.php', '/healthz.txt', '/wp-content/debug.log']:
                 assert request(path)[0] == 403, 'Protected endpoint accessible: ' + path
             for service, expected_user in [('wordpress', '33'), ('proxy', '1000')]:
