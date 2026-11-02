@@ -29,7 +29,9 @@ USER 33:33
 ENTRYPOINT ["security-entrypoint"]
 CMD ["apache2-foreground"]
 
-FROM caddy:2.11.3-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794 AS proxy
+FROM caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 AS proxy
 COPY config/Caddyfile /etc/caddy/Caddyfile
-RUN mkdir -p /data /config && chown -R 1000:1000 /data /config
+RUN setcap -r /usr/bin/caddy \
+    && mkdir -p /data /config \
+    && chown -R 1000:1000 /data /config
 USER 1000:1000

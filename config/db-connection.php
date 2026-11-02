@@ -3,10 +3,12 @@
 function deployment_database(array $settings): mysqli {
     mysqli_report(MYSQLI_REPORT_OFF);
     $connection = mysqli_init();
-    $connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, 5);
-    $connection->options(MYSQLI_OPT_READ_TIMEOUT, 10);
-    $connection->ssl_set(null, null, '/etc/ssl/certs/ca-certificates.crt', null, null);
-    $connection->options(MYSQLI_OPT_SSL_VERIFY_SERVER_CERT, true);
+    if (!$connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, 5)
+        || !$connection->options(MYSQLI_OPT_READ_TIMEOUT, 10)
+        || !$connection->ssl_set(null, null, '/etc/ssl/certs/ca-certificates.crt', null, null)
+        || !$connection->options(MYSQLI_OPT_SSL_VERIFY_SERVER_CERT, true)) {
+        throw new RuntimeException('Database driver cannot enforce the required TLS policy');
+    }
     if (!@$connection->real_connect($settings['host'], $settings['user'], $settings['password'],
         $settings['database'], (int)$settings['port'], null, MYSQLI_CLIENT_SSL)) {
         throw new RuntimeException('Verified TLS database connection failed');

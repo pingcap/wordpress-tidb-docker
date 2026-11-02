@@ -38,6 +38,7 @@ https://localhost:8443 {
     request_body {
         max_size 16MB
     }
+    respond /healthz "ok"
     @blocked path /xmlrpc.php /wp-cron.php /wp-config.php /wp-content/debug.log /healthz.txt
     respond @blocked 403
     reverse_proxy wordpress:8080 {
