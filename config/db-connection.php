@@ -33,7 +33,7 @@ function deployment_database(array $settings): mysqli {
         $usage = preg_match('/\AGRANT USAGE ON \*\.\* TO /i', $grant);
         // TiDB may omit identifier quotes while MySQL emits backticks. Compare
         // schema names exactly, even when privilege names use mixed case.
-        $scoped = preg_match('/\AGRANT (?:ALL PRIVILEGES|(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|REFERENCES)(?:, (?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|REFERENCES))*) ON (`[a-zA-Z][a-zA-Z0-9]*`|[a-zA-Z][a-zA-Z0-9]*)\.\* TO /i', $grant, $match)
+        $scoped = preg_match('/\AGRANT (?:ALL PRIVILEGES|(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|REFERENCES)(?:,\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|REFERENCES))*) ON (`[a-zA-Z][a-zA-Z0-9]*`|[a-zA-Z][a-zA-Z0-9]*)\.\* TO /i', $grant, $match)
             && trim($match[1], '`') === $settings['database'];
         if ((!$usage && !$scoped) || stripos($grant, 'WITH GRANT OPTION') !== false) {
             $connection->close();
