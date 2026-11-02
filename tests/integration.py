@@ -147,7 +147,7 @@ def main():
                     break
                 time.sleep(2)
             else:
-                raise AssertionError('TiDB fixture did not become available')
+                raise AssertionError('TiDB fixture did not become available: ' + result.stderr)
             dc(*tidb_client, input=(fixture / 'init.sql').read_text())
             connect('-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000')
             dc(*tidb_client, input="GRANT SELECT ON *.* TO 'wpfixture'@'%';\n")
@@ -210,15 +210,20 @@ def main():
             assert request('/wp-content/uploads/probe.php')[0] == 403, 'Uploaded PHP executable'
             token = 'SENSITIVELOGMARKER' + secrets.token_hex(12)
             request('/wp-login.php?key=' + token, {'Cookie': 'secret=' + token, 'User-Agent': token})
-            failed_login = dc('exec', '-T', 'wordpress', 'php', '-r',
-               'require "/opt/wordpress/wp-load.php"; do_action("wp_login_failed", "' + token + '");')
+            cookies.clear()
+            request('/wp-login.php')
+            invalid_login = urllib.parse.urlencode({'log': token, 'pwd': token, 'testcookie': '1'}).encode()
+            with opener.open('https://localhost:8443/wp-login.php', data=invalid_login, timeout=10) as response:
+                assert response.status == 200
             failed_query = dc('exec', '-T', 'wordpress', 'php', '-r',
                'require "/opt/wordpress/wp-load.php"; $wpdb->query("SELECT * FROM nonexistent_' + token + '");')
             # Docker exec has its own stdout/stderr; it is not the container's
             # main process log stream. Inspect both paths for CLI and web events.
-            logs = dc('logs', '--no-color').stdout + installation.stderr + failed_login.stderr + failed_query.stderr
+            web_logs = dc('logs', '--no-color').stdout
+            logs = web_logs + installation.stderr + failed_query.stderr
             assert token not in logs and password not in logs and admin_password not in logs, 'Sensitive data appeared in logs'
-            assert all(event in logs for event in ['admin_bootstrap', 'login_failure', 'login_success']), 'Missing audit events'
+            assert 'admin_bootstrap' in installation.stderr, 'Missing bootstrap audit event'
+            assert 'login_success' in web_logs and 'login_failure' in web_logs, 'Missing web login audit events'
             config = json.loads(dc('config', '--format', 'json').stdout)
             assert not config['services']['wordpress'].get('ports')
             ports = config['services']['proxy']['ports']

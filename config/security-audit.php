@@ -3,13 +3,15 @@
 // Record event types and numeric IDs only; never passwords, tokens, content,
 // option values, supplied usernames, cookies or request URLs.
 function deployment_audit(string $event, int $target = 0): void {
+    // Write the redacted audit stream directly so Apache's general error-log
+    // severity filter cannot suppress security events from web requests.
     error_log(json_encode([
         'type' => 'wordpress_security',
         'event' => $event,
         'actor_id' => function_exists('get_current_user_id') ? get_current_user_id() : 0,
         'target_id' => $target,
         'time' => gmdate('c'),
-    ], JSON_UNESCAPED_SLASHES));
+    ], JSON_UNESCAPED_SLASHES) . PHP_EOL, 3, '/proc/self/fd/2');
 }
 add_action('wp_install', function ($user) { deployment_audit('admin_bootstrap', (int)$user->ID); });
 add_action('wp_login', function ($name, $user) { deployment_audit('login_success', (int)$user->ID); }, 10, 2);
