@@ -141,7 +141,7 @@ def main():
                     break
                 time.sleep(1)
             else:
-                raise AssertionError('Proxy certificate unavailable')
+                raise AssertionError('Proxy certificate unavailable: ' + result.stderr)
             context = ssl.create_default_context(cafile=str(fixture / 'local-ca.crt'))
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
 
@@ -177,6 +177,10 @@ def main():
             assert len(ports) == 1 and ports[0]['host_ip'] == '127.0.0.1'
             assert password not in json.dumps(config), 'Password included in rendered Compose config'
             print('Installation, reconnect, HTTPS, immutable code, uploads, audit redaction and loopback binding passed.', flush=True)
+        except BaseException:
+            print(dc('ps', '--all', check=False).stdout, flush=True)
+            print(dc('logs', '--no-color', '--tail', '80', 'proxy', check=False).stdout, flush=True)
+            raise
         finally:
             # This project and its volumes were created exclusively for this test.
             dc('down', '--volumes', '--remove-orphans', check=False)

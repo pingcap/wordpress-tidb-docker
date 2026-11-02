@@ -2,7 +2,7 @@ name: Security regression tests
 on:
   pull_request:
   push:
-    branches: [main, codex/wordpress-security-hardening]
+    branches: [main]
 permissions:
   contents: read
 jobs:
