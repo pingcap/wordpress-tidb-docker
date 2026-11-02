@@ -93,7 +93,7 @@ def main():
 
         connection = ('require "/opt/security/settings.php"; require "/opt/security/db-connection.php"; '
                       'try { deployment_database(deployment_settings()); echo "verified\n"; } '
-                      'catch (Throwable $e) { fwrite(STDERR, "connection rejected\n"); exit(1); }')
+                      'catch (Throwable $e) { fwrite(STDERR, $e->getMessage() . "\n"); exit(1); }')
 
         def connect(*options, expect=True):
             result = dc('exec', '-T', *options, 'wordpress', 'php', '-r', connection, check=False)

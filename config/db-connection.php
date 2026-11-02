@@ -1,16 +1,19 @@
 <?php
 /** Connect with verified TLS and reject credentials with broader privileges. */
 function deployment_database(array $settings): mysqli {
+    if (!extension_loaded('mysqlnd') || !defined('MYSQLI_CLIENT_SSL_VERIFY_SERVER_CERT')) {
+        throw new RuntimeException('The verified mysqlnd TLS driver is required');
+    }
     mysqli_report(MYSQLI_REPORT_OFF);
     $connection = mysqli_init();
     if (!$connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, 5)
         || !$connection->options(MYSQLI_OPT_READ_TIMEOUT, 10)
-        || !$connection->ssl_set(null, null, '/etc/ssl/certs/ca-certificates.crt', null, null)
-        || !$connection->options(MYSQLI_OPT_SSL_VERIFY_SERVER_CERT, true)) {
+        || !$connection->ssl_set(null, null, '/etc/ssl/certs/ca-certificates.crt', null, null)) {
         throw new RuntimeException('Database driver cannot enforce the required TLS policy');
     }
     if (!@$connection->real_connect($settings['host'], $settings['user'], $settings['password'],
-        $settings['database'], (int)$settings['port'], null, MYSQLI_CLIENT_SSL)) {
+        $settings['database'], (int)$settings['port'], null,
+        MYSQLI_CLIENT_SSL | MYSQLI_CLIENT_SSL_VERIFY_SERVER_CERT)) {
         throw new RuntimeException('Verified TLS database connection failed');
     }
     $cipher = $connection->query("SHOW SESSION STATUS LIKE 'Ssl_cipher'");
