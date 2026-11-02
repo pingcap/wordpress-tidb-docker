@@ -1,0 +1,20 @@
+name: Security regression tests
+on:
+  pull_request:
+  push:
+    branches: [main, codex/wordpress-security-hardening]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Setup regression tests
+        run: python3 -m unittest discover -s tests
+      - name: Real container and TLS regression tests
+        run: python3 tests/integration.py

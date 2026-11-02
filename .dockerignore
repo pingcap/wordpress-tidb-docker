@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!config/
+!config/**
+!scripts/
+!scripts/entrypoint.sh
+!wordpress-tidb-compatibility-plugin/
+!wordpress-tidb-compatibility-plugin/LICENSE
+!wordpress-tidb-compatibility-plugin/tidb-compatibility/
+!wordpress-tidb-compatibility-plugin/tidb-compatibility/tidb-compatibility.php
