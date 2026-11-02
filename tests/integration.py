@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the real images using an isolated, disposable TLS MySQL fixture."""
+"""Exercise the real images with disposable TLS MySQL and TiDB fixtures."""
 import json
 import http.cookiejar
 import os
@@ -17,6 +17,7 @@ import urllib.parse
 
 SOURCE = Path(__file__).resolve().parents[1]
 MYSQL = 'mysql:8.4@sha256:a0225d1ea6631c8bc2385dc4c2faba17bbf1834ecf369e1659a9a382bd8d5dd7'
+TIDB = 'pingcap/tidb:v8.5.4@sha256:e986dadd59937fbfcbdfe7fd084421cc65988da8b795f75194b05a0292635ead'
 
 
 def run(args, cwd=None, check=True, input=None):
@@ -53,7 +54,9 @@ def main():
                  '-keyout', f'{ca}.key', '-out', f'{ca}.crt', '-subj', f'/CN=Disposable {ca}'], cwd=fixture)
         run(['openssl', 'req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'server.key',
              '-out', 'server.csr', '-subj', '/CN=db'], cwd=fixture)
-        (fixture / 'extensions').write_text('subjectAltName=DNS:db\nextendedKeyUsage=serverAuth\n')
+        (fixture / 'extensions').write_text('subjectAltName=DNS:db,DNS:tidb\nextendedKeyUsage=serverAuth\n')
+        (fixture / 'tidb.toml').write_text('[security]\nssl-ca="/tls/ca.crt"\n'
+                                         'ssl-cert="/tls/server.crt"\nssl-key="/tls/server.key"\n')
         run(['openssl', 'x509', '-req', '-in', 'server.csr', '-CA', 'ca.crt', '-CAkey', 'ca.key',
              '-CAcreateserial', '-out', 'server.crt', '-days', '1', '-sha256', '-extfile', 'extensions'], cwd=fixture)
         for name in ['server.key', 'server.crt', 'ca.crt', 'untrusted.crt', 'root-password']:
@@ -78,6 +81,16 @@ def main():
                                 './test-fixtures/root-password:/run/secrets/root-password:ro',
                                 './test-fixtures/init.sql:/docker-entrypoint-initdb.d/init.sql:ro'],
                     'networks': {'backend': {'aliases': ['wrongdb']}},
+                },
+                'tidb': {
+                    'image': TIDB,
+                    'command': ['--store=unistore', '--path=/tmp/tidb', '--host=0.0.0.0',
+                                '--config=/tls/tidb.toml', '--log-level=error'],
+                    'volumes': ['./test-fixtures/server.key:/tls/server.key:ro',
+                                './test-fixtures/server.crt:/tls/server.crt:ro',
+                                './test-fixtures/ca.crt:/tls/ca.crt:ro',
+                                './test-fixtures/tidb.toml:/tls/tidb.toml:ro'],
+                    'networks': ['backend'],
                 },
             }
         }
@@ -126,6 +139,22 @@ def main():
             connect()
             print('Wrong hostname, untrusted CA, root/shared settings and global grants rejected.', flush=True)
 
+            tidb_client = ('exec', '-T', 'db', 'mysql', '--host=tidb', '--port=4000',
+                           '--ssl-mode=VERIFY_IDENTITY', '--ssl-ca=/tls/ca.crt', '-uroot')
+            for attempt in range(60):
+                result = dc(*tidb_client, input='SELECT 1;\n', check=False)
+                if result.returncode == 0:
+                    break
+                time.sleep(2)
+            else:
+                raise AssertionError('TiDB fixture did not become available')
+            dc(*tidb_client, input=(fixture / 'init.sql').read_text())
+            connect('-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000')
+            dc(*tidb_client, input="GRANT SELECT ON *.* TO 'wpfixture'@'%';\n")
+            connect('-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000', expect=False)
+            dc(*tidb_client, input="REVOKE SELECT ON *.* FROM 'wpfixture'@'%';\n")
+            connect('-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000')
+
             admin_password = secrets.token_urlsafe(32)
             install = ('define("WP_INSTALLING", true); require "/opt/wordpress/wp-load.php"; '
                        'require "/opt/wordpress/wp-admin/includes/upgrade.php"; '
@@ -133,7 +162,9 @@ def main():
                        f'wp_install("Test site", "fixtureadmin", "admin@example.invalid", false, "", "{admin_password}"); '
                        'update_option("home", "https://localhost:8443"); '
                        'update_option("siteurl", "https://localhost:8443");')
-            dc('exec', '-T', 'wordpress', 'php', '-r', install)
+            installation = dc('exec', '-T', 'wordpress', 'php', '-r', install)
+            dc('exec', '-T', '-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000', 'wordpress', 'php', '-r', install)
+            print('TiDB verified TLS, schema-scoped grants and WordPress installation passed.', flush=True)
             dc('exec', '-T', 'wordpress', 'php', '-r',
                'require "/opt/wordpress/wp-load.php"; '
                'if (!$wpdb->db_connect(false) || !is_blog_installed() || !class_exists("FIX_WP_SLOW_QUERY")) exit(1);')
@@ -179,13 +210,15 @@ def main():
             assert request('/wp-content/uploads/probe.php')[0] == 403, 'Uploaded PHP executable'
             token = 'SENSITIVELOGMARKER' + secrets.token_hex(12)
             request('/wp-login.php?key=' + token, {'Cookie': 'secret=' + token, 'User-Agent': token})
-            dc('exec', '-T', 'wordpress', 'php', '-r',
+            failed_login = dc('exec', '-T', 'wordpress', 'php', '-r',
                'require "/opt/wordpress/wp-load.php"; do_action("wp_login_failed", "' + token + '");')
-            dc('exec', '-T', 'wordpress', 'php', '-r',
+            failed_query = dc('exec', '-T', 'wordpress', 'php', '-r',
                'require "/opt/wordpress/wp-load.php"; $wpdb->query("SELECT * FROM nonexistent_' + token + '");')
-            logs = dc('logs', '--no-color').stdout
+            # Docker exec has its own stdout/stderr; it is not the container's
+            # main process log stream. Inspect both paths for CLI and web events.
+            logs = dc('logs', '--no-color').stdout + installation.stderr + failed_login.stderr + failed_query.stderr
             assert token not in logs and password not in logs and admin_password not in logs, 'Sensitive data appeared in logs'
-            assert 'admin_bootstrap' in logs and 'login_failure' in logs, 'Missing audit events'
+            assert all(event in logs for event in ['admin_bootstrap', 'login_failure', 'login_success']), 'Missing audit events'
             config = json.loads(dc('config', '--format', 'json').stdout)
             assert not config['services']['wordpress'].get('ports')
             ports = config['services']['proxy']['ports']
