@@ -1,0 +1,47 @@
+{
+    admin off
+    auto_https disable_redirects
+    skip_install_trust
+    log default {
+        output stdout
+        format filter {
+            wrap json
+            fields {
+                request>uri delete
+                request>headers delete
+                resp_headers delete
+            }
+        }
+    }
+}
+
+https://localhost:8443 {
+    tls internal
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+        X-Frame-Options SAMEORIGIN
+        -Server
+    }
+    # Do not log query strings (reset tokens), cookies, headers or request bodies.
+    log {
+        output stdout
+        format filter {
+            wrap json
+            fields {
+                request>uri delete
+                request>headers delete
+                resp_headers delete
+            }
+        }
+    }
+    request_body {
+        max_size 16MB
+    }
+    respond /healthz "ok"
+    @blocked path /xmlrpc.php /wp-cron.php /wp-config.php /wp-content/debug.log /healthz.txt
+    respond @blocked 403
+    reverse_proxy wordpress:8080 {
+        header_up X-Forwarded-Proto https
+    }
+}

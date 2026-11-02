@@ -1,18 +1,89 @@
-version: "3"
+name: ${COMPOSE_PROJECT_NAME:?Set a unique project name in .env}
+
+x-runtime: &runtime
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "5"
+
 services:
   wordpress:
-    image: wordpress
-    volumes:
-      - "./wordpress-tidb-compatibility-plugin/tidb-compatibility/tidb-compatibility.php:/var/www/html/wp-content/mu-plugins/tidb-compatibility.php"
-    ports:
-      - 80:80
+    <<: *runtime
+    build:
+      context: .
+      target: wordpress
+    user: "33:33"
+    cpus: 1.0
+    mem_limit: 512m
     environment:
-      WORDPRESS_DB_HOST: '${TIDB_HOST}:${TIDB_PORT}'
-      WORDPRESS_DB_NAME: '${TIDB_DB_NAME}'
-      WORDPRESS_DB_PASSWORD: '${TIDB_PASSWORD}'
-      WORDPRESS_DB_USER: '${TIDB_USER}'
-      WORDPRESS_DB_COLLATE: 'utf8mb4_bin'
-      WORDPRESS_CONFIG_EXTRA: |
-        define('MYSQL_CLIENT_FLAGS', MYSQLI_CLIENT_SSL);
-        define('MYSQL_SSL_CA', '/etc/ssl/certs/ca-certificates.crt');
-        define('DB_COLLATE', 'utf8mb4_bin');
+      TIDB_HOST: ${TIDB_HOST:?Set TIDB_HOST}
+      TIDB_PORT: ${TIDB_PORT:-4000}
+      TIDB_USER: ${TIDB_USER:?Use a dedicated database user}
+      TIDB_DB_NAME: ${TIDB_DB_NAME:?Use a dedicated database}
+      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX:?Set a unique table prefix}
+    secrets:
+      - db_password
+      - source: wp_salts
+        target: wp_salts.json
+    volumes:
+      - uploads:/opt/wordpress/wp-content/uploads
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=33,gid=33
+      - /var/run/apache2:rw,noexec,nosuid,nodev,size=1m,uid=33,gid=33
+      - /var/lock/apache2:rw,noexec,nosuid,nodev,size=1m,uid=33,gid=33
+    healthcheck:
+      test: [CMD, php, /opt/security/healthcheck.php]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [backend, database_egress]
+
+  proxy:
+    <<: *runtime
+    build:
+      context: .
+      target: proxy
+    user: "1000:1000"
+    cpus: 0.5
+    mem_limit: 128m
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=1000,gid=1000
+    depends_on:
+      wordpress:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --cacert, /data/caddy/pki/authorities/local/root.crt, "https://localhost:8443/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [backend, frontend]
+
+networks:
+  backend:
+    internal: true
+  database_egress:
+  frontend:
+
+volumes:
+  uploads:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  wp_salts:
+    file: ./secrets/wp_salts.json
