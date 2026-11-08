@@ -4,6 +4,8 @@
 !config/**
 !scripts/
 !scripts/entrypoint.sh
+!scripts/database-relay.sh
+!scripts/database-relay-health.sh
 !wordpress-tidb-compatibility-plugin/
 !wordpress-tidb-compatibility-plugin/LICENSE
 !wordpress-tidb-compatibility-plugin/tidb-compatibility/

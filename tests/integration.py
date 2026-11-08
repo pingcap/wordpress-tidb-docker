@@ -46,6 +46,7 @@ def main():
         fixture.mkdir()
         token = 'SENSITIVELOGMARKER' + secrets.token_hex(12)
         (fixture / 'empty-audit.php').write_text('')
+        (fixture / 'egress-canary.php').write_text('<?php echo "controlled-egress-canary";')
         shutil.copy(SOURCE / 'tests/security-state.php', fixture / 'security-state.php')
         (fixture / 'security-probe.php').write_text(
             '<?php require "/opt/wordpress/wp-load.php"; '
@@ -80,12 +81,21 @@ def main():
                          'COPY test-fixtures/ca.crt /usr/local/share/ca-certificates/fixture.crt\n'
                          'COPY test-fixtures/security-probe.php /opt/wordpress/security-probe.php\n'
                          'COPY test-fixtures/security-state.php /opt/security-state-test.php\n'
+                         'COPY test-fixtures/egress-canary.php /opt/egress-canary.php\n'
                          'RUN update-ca-certificates\nUSER 33:33\n')
         with (root / '.dockerignore').open('a') as output:
-            output.write('\n!test-fixtures/\n!test-fixtures/ca.crt\n!test-fixtures/security-probe.php\n!test-fixtures/security-state.php\n')
+            output.write('\n!test-fixtures/\n!test-fixtures/ca.crt\n!test-fixtures/security-probe.php\n!test-fixtures/security-state.php\n!test-fixtures/egress-canary.php\n')
         override = {
             'services': {
                 'wordpress': {'build': {'target': 'wordpress-test'}},
+                'db-relay': {'networks': {'backend': {'aliases': ['wrongdb']}}},
+                'egress-canary': {
+                    'build': {'context': '.', 'target': 'wordpress-test'},
+                    'entrypoint': ['php', '-S', '0.0.0.0:8090', '/opt/egress-canary.php'],
+                    'user': '33:33', 'read_only': True, 'cap_drop': ['ALL'],
+                    'security_opt': ['no-new-privileges:true'],
+                    'networks': ['database_egress'],
+                },
                 'db': {
                     'image': MYSQL,
                     'environment': {'MYSQL_ROOT_PASSWORD_FILE': '/run/secrets/root-password'},
@@ -96,7 +106,7 @@ def main():
                                 './test-fixtures/ca.crt:/tls/ca.crt:ro',
                                 './test-fixtures/root-password:/run/secrets/root-password:ro',
                                 './test-fixtures/init.sql:/docker-entrypoint-initdb.d/init.sql:ro'],
-                    'networks': {'backend': {'aliases': ['wrongdb']}},
+                    'networks': ['database_egress'],
                 },
                 'tidb': {
                     'image': TIDB,
@@ -106,7 +116,7 @@ def main():
                                 './test-fixtures/server.crt:/tls/server.crt:ro',
                                 './test-fixtures/ca.crt:/tls/ca.crt:ro',
                                 './test-fixtures/tidb.toml:/tls/tidb.toml:ro'],
-                    'networks': ['backend'],
+                    'networks': ['database_egress'],
                 },
             }
         }
@@ -144,6 +154,43 @@ def main():
             state_tests = dc('exec', '-T', 'wordpress', 'php', '/opt/security-state-test.php')
             assert 'concurrency passed' in state_tests.stdout
             print(state_tests.stdout.strip(), flush=True)
+            # The canary and real databases sit outside the app's isolated
+            # network. A positive control prevents mistaking a dead target for
+            # a successful network restriction.
+            positive = dc('exec', '-T', 'database-gateway', 'wget', '-qO-', 'http://egress-canary:8090/')
+            assert positive.stdout == 'controlled-egress-canary', 'External canary unavailable'
+            outside_ids = dc('ps', '-q', 'egress-canary', 'db').stdout.split()
+            outside = json.loads(run(['docker', 'inspect'] + outside_ids).stdout)
+            outside_ips = [network['IPAddress'] for item in outside
+                           for network in item['NetworkSettings']['Networks'].values()]
+            targets = [[address, port] for address in outside_ips for port in [8090, 3306]]
+            targets += [['1.1.1.1', 443], ['169.254.169.254', 80], ['[2606:4700:4700::1111]', 443]]
+            dc('exec', '-T', 'wordpress', 'php', '-r',
+               '$targets=json_decode(stream_get_contents(STDIN), true); '
+               'foreach ($targets as [$host,$port]) { '
+               '$c=@stream_socket_client("tcp://".$host.":".$port,$e,$s,1); '
+               'if ($c) { fclose($c); exit(1); } } '
+               'foreach (["example.com","egress-canary","database-gateway"] as $name) '
+               '{ if (gethostbyname($name)!==$name) exit(1); } '
+               '$routes=file("/proc/net/route"); foreach (array_slice($routes,1) as $line) '
+               '{ $parts=preg_split("/\\s+/", trim($line)); if ($parts[1]==="00000000") exit(1); }',
+               input=json.dumps(targets))
+            for network_name in ['backend', 'database_transit']:
+                network = json.loads(run(['docker', 'network', 'inspect', project + '_' + network_name]).stdout)[0]
+                assert network['Internal'] and not network['EnableIPv6']
+                assert all(not entry.get('Gateway') for entry in network['IPAM']['Config']), 'Host gateway still exposed'
+                assert network['Options']['com.docker.network.bridge.gateway_mode_ipv4'] == 'isolated'
+            print('Fixed-target database relay works; direct external/DNS/IPv6/metadata paths are blocked.', flush=True)
+
+            # Re-resolve a recreated gateway without recreating WordPress or
+            # changing its TLS identity.
+            dc('up', '-d', '--no-deps', '--force-recreate', 'database-gateway')
+            for attempt in range(30):
+                if dc('exec', '-T', 'wordpress', 'php', '-r', connection, check=False).returncode == 0:
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError('Fixed relay did not recover after gateway recreation')
             connect('-e', 'TIDB_HOST=wrongdb', expect=False)
             result = dc('run', '--rm', '--no-deps', '--volume',
                         str(fixture / 'untrusted.crt') + ':/etc/ssl/certs/ca-certificates.crt:ro',
@@ -154,6 +201,8 @@ def main():
             connect('-e', 'WORDPRESS_TABLE_PREFIX=wp_', expect=False)
             connect('-e', 'WORDPRESS_TABLE_PREFIX=WP_', expect=False)
             connect('-e', 'WORDPRESS_TABLE_PREFIX=Wp_', expect=False)
+            for bad_host in ['127.0.0.1', 'proxy', 'database-gateway']:
+                connect('-e', 'TIDB_HOST=' + bad_host, expect=False)
             dc('exec', '-T', 'wordpress', 'php', '-r',
                'require "/opt/security/db-connection.php"; '
                'try { deployment_verify_grants([], "wordpresstest"); exit(1); } '
@@ -168,6 +217,15 @@ def main():
             connect()
             print('Wrong hostname, untrusted CA, root/shared settings and global grants rejected.', flush=True)
 
+            admin_password = secrets.token_urlsafe(32)
+            install = ('define("WP_INSTALLING", true); require "/opt/wordpress/wp-load.php"; '
+                       'require "/opt/wordpress/wp-admin/includes/upgrade.php"; '
+                       '$_SERVER["HTTP_HOST"] = "localhost:8443"; $_SERVER["HTTPS"] = "on"; '
+                       f'wp_install("Test site", "fixtureadmin", "admin@example.invalid", false, "", "{admin_password}"); '
+                       'update_option("home", "https://localhost:8443"); '
+                       'update_option("siteurl", "https://localhost:8443");')
+            installation = dc('exec', '-T', 'wordpress', 'php', '-r', install)
+
             tidb_client = ('exec', '-T', 'db', 'mysql', '--host=tidb', '--port=4000',
                            '--ssl-mode=VERIFY_IDENTITY', '--ssl-ca=/tls/ca.crt', '-uroot')
             for attempt in range(60):
@@ -178,21 +236,23 @@ def main():
             else:
                 raise AssertionError('TiDB fixture did not become available: ' + result.stderr)
             dc(*tidb_client, input=(fixture / 'init.sql').read_text())
-            connect('-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000')
+            # Reconfigure the actual fixed destination, not a bypass test
+            # network. Subsequent web/media/login tests run on real TLS TiDB.
+            env = (root / '.env').read_text().replace('TIDB_HOST=db\n', 'TIDB_HOST=tidb\n').replace('TIDB_PORT=3306\n', 'TIDB_PORT=4000\n')
+            (root / '.env').write_text(env)
+            dc('up', '-d', '--no-deps', '--force-recreate', 'database-gateway', 'db-relay', 'wordpress')
+            for attempt in range(30):
+                if dc('exec', '-T', 'wordpress', 'php', '-r', connection, check=False).returncode == 0:
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError('Fixed relay could not connect to the reconfigured TiDB endpoint')
+            connect()
             dc(*tidb_client, input="GRANT SELECT ON *.* TO 'wpfixture'@'%';\n")
-            connect('-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000', expect=False)
+            connect(expect=False)
             dc(*tidb_client, input="REVOKE SELECT ON *.* FROM 'wpfixture'@'%';\n")
-            connect('-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000')
-
-            admin_password = secrets.token_urlsafe(32)
-            install = ('define("WP_INSTALLING", true); require "/opt/wordpress/wp-load.php"; '
-                       'require "/opt/wordpress/wp-admin/includes/upgrade.php"; '
-                       '$_SERVER["HTTP_HOST"] = "localhost:8443"; $_SERVER["HTTPS"] = "on"; '
-                       f'wp_install("Test site", "fixtureadmin", "admin@example.invalid", false, "", "{admin_password}"); '
-                       'update_option("home", "https://localhost:8443"); '
-                       'update_option("siteurl", "https://localhost:8443");')
+            connect()
             installation = dc('exec', '-T', 'wordpress', 'php', '-r', install)
-            dc('exec', '-T', '-e', 'TIDB_HOST=tidb', '-e', 'TIDB_PORT=4000', 'wordpress', 'php', '-r', install)
             print('TiDB verified TLS, schema-scoped grants and WordPress installation passed.', flush=True)
             dc('exec', '-T', 'wordpress', 'php', '-r',
                'require "/opt/wordpress/wp-load.php"; '
@@ -246,7 +306,7 @@ def main():
                 'if (!str_contains($http_response_header[0] ?? "", "403")) exit(1);')
             for path in ['/xmlrpc.php', '/wp-cron.php', '/wp-config.php', '/healthz.txt', '/wp-content/debug.log']:
                 assert request(path)[0] == 403, 'Protected endpoint accessible: ' + path
-            for service, expected_user in [('wordpress', '33'), ('proxy', '1000')]:
+            for service, expected_user in [('wordpress', '33'), ('proxy', '1000'), ('db-relay', '99'), ('database-gateway', '99')]:
                 assert dc('exec', '-T', service, 'id', '-u').stdout.strip() == expected_user
             assert dc('exec', '-T', 'wordpress', 'touch', '/opt/wordpress/wp-content/mu-plugins/evil.php', check=False).returncode != 0
             dc('exec', '-T', 'wordpress', 'sh', '-c',
@@ -298,6 +358,11 @@ def main():
             assert '"actor_id":1' in role_audit.stderr
             config = json.loads(dc('config', '--format', 'json').stdout)
             assert not config['services']['wordpress'].get('ports')
+            assert set(config['services']['wordpress']['networks']) == {'backend'}
+            for relay in ['db-relay', 'database-gateway']:
+                assert not config['services'][relay].get('ports')
+                assert not config['services'][relay].get('secrets')
+                assert not config['services'][relay].get('volumes')
             ports = config['services']['proxy']['ports']
             assert len(ports) == 1 and ports[0]['host_ip'] == '127.0.0.1'
             assert password not in json.dumps(config), 'Password included in rendered Compose config'
@@ -403,7 +468,7 @@ def main():
             print('Concurrent HTTP login limits, source spoofing, expiry, fail-closed storage and independent audit retention passed.', flush=True)
         except BaseException:
             print(dc('ps', '--all', check=False).stdout, flush=True)
-            print(dc('logs', '--no-color', '--tail', '80', 'proxy', 'tidb', check=False).stdout, flush=True)
+            print(dc('logs', '--no-color', '--tail', '80', 'proxy', 'tidb', 'db-relay', 'database-gateway', check=False).stdout, flush=True)
             raise
         finally:
             # This project and its volumes were created exclusively for this test.

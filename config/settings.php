@@ -13,7 +13,9 @@ function deployment_settings(): array {
     $user = $required('TIDB_USER');
     $database = $required('TIDB_DB_NAME');
     $prefix = $required('WORDPRESS_TABLE_PREFIX');
-    if (!preg_match('/\A[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\z/', $host)
+    if (strlen($host) > 253 || !preg_match('/\A[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\z/', $host)
+        || !preg_match('/[a-zA-Z]/', $host)
+        || in_array(strtolower($host), ['wordpress', 'proxy', 'db-relay', 'database-gateway'], true)
         || !ctype_digit($port) || (int)$port < 1 || (int)$port > 65535) {
         throw new RuntimeException('Invalid database endpoint');
     }
