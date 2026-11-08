@@ -41,3 +41,13 @@ RUN setcap -r /usr/bin/caddy \
     && mkdir -p /data /config \
     && chown -R 1000:1000 /data /config
 USER 1000:1000
+
+# The relays have no WordPress code, uploads or secret mounts. They pass the
+# original MySQL TLS stream unchanged to one operator-configured destination.
+FROM haproxy:3.4.7-alpine@sha256:5312d37032c079c4937d45ef63758852434351f3b425a3703521fd999837abcf AS database-relay
+COPY config/db-relay.cfg config/db-gateway.cfg /usr/local/etc/haproxy/
+COPY scripts/database-relay.sh /usr/local/bin/database-relay
+RUN chmod 0555 /usr/local/bin/database-relay
+USER 99:99
+ENTRYPOINT ["database-relay"]
+CMD ["db-relay"]

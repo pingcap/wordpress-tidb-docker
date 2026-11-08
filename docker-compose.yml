@@ -44,7 +44,53 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    networks: [backend, database_egress]
+    depends_on:
+      db-relay:
+        condition: service_healthy
+    networks: [backend]
+
+  db-relay:
+    <<: *runtime
+    build:
+      context: .
+      target: database-relay
+    user: "99:99"
+    cpus: 0.25
+    mem_limit: 64m
+    environment:
+      TIDB_HOST: ${TIDB_HOST:?Set TIDB_HOST}
+      TIDB_PORT: ${TIDB_PORT:-4000}
+    depends_on:
+      database-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8404/"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      backend:
+        aliases: ["${TIDB_HOST:?Set TIDB_HOST}"]
+      database_transit:
+
+  database-gateway:
+    <<: *runtime
+    build:
+      context: .
+      target: database-relay
+    command: [db-gateway]
+    user: "99:99"
+    cpus: 0.25
+    mem_limit: 64m
+    environment:
+      TIDB_HOST: ${TIDB_HOST:?Set TIDB_HOST}
+      TIDB_PORT: ${TIDB_PORT:-4000}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8404/"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks: [database_transit, database_egress]
 
   proxy:
     <<: *runtime
@@ -75,6 +121,16 @@ services:
 networks:
   backend:
     internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
+  database_transit:
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
   database_egress:
   frontend:
 
