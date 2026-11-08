@@ -5,4 +5,6 @@ test -s /opt/wordpress/wp-content/mu-plugins/tidb-compatibility.php
 test -s /opt/wordpress/wp-content/db.php
 test -s /opt/wordpress/wp-content/mu-plugins/security-audit.php
 test -s /opt/security/audit.php
+test -s /opt/security/login-limits.php
+php -r 'require "/opt/security/security-storage.php"; try { deployment_check_security_storage(); } catch (Throwable $e) { fwrite(STDERR, "Private security storage is required.\n"); exit(1); }'
 exec "$@"

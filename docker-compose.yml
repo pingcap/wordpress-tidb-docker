@@ -33,6 +33,7 @@ services:
         target: wp_salts.json
     volumes:
       - uploads:/opt/wordpress/wp-content/uploads
+      - security_state:/var/lib/wordpress-security
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=33,gid=33
       - /var/run/apache2:rw,noexec,nosuid,nodev,size=1m,uid=33,gid=33
@@ -79,6 +80,7 @@ networks:
 
 volumes:
   uploads:
+  security_state:
   caddy_data:
   caddy_config:
 
