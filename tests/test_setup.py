@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+import importlib.util
 
 
 class SetupTests(unittest.TestCase):
@@ -52,6 +54,19 @@ class SetupTests(unittest.TestCase):
         (self.root / 'secrets').symlink_to(self.root / 'destination')
         self.assertNotEqual(self.run_setup().returncode, 0)
         self.assertEqual(list((self.root / 'destination').iterdir()), [])
+
+    def test_interrupted_rotation_preserves_current_keys_and_cleans_temporary_file(self):
+        self.assertEqual(self.run_setup().returncode, 0)
+        before = (self.root / 'secrets/wp_salts.json').read_bytes()
+        spec = importlib.util.spec_from_file_location('isolated_setup', self.root / 'scripts/setup.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch.object(module.os, 'replace', side_effect=OSError('fixture failure')):
+            with patch('sys.argv', ['setup.py', '--rotate-salts']):
+                with self.assertRaises(OSError):
+                    module.main()
+        self.assertEqual((self.root / 'secrets/wp_salts.json').read_bytes(), before)
+        self.assertEqual(list((self.root / 'secrets').glob('salts-*')), [])
 
 
 if __name__ == '__main__':

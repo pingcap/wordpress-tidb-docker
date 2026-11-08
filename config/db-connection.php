@@ -1,4 +1,20 @@
 <?php
+function deployment_verify_grants(iterable $grants, string $database): void {
+    $count = 0;
+    foreach ($grants as $grant) {
+        ++$count;
+        $usage = preg_match('/\AGRANT USAGE ON \*\.\* TO /i', $grant);
+        $scoped = preg_match('/\AGRANT (?:ALL PRIVILEGES|(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|REFERENCES)(?:,\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|REFERENCES))*) ON (`[a-zA-Z][a-zA-Z0-9]*`|[a-zA-Z][a-zA-Z0-9]*)\.\* TO /i', $grant, $match)
+            && trim($match[1], '`') === $database;
+        if ((!$usage && !$scoped) || stripos($grant, 'WITH GRANT OPTION') !== false) {
+            throw new RuntimeException('Database privileges exceed the dedicated application schema');
+        }
+    }
+    if ($count === 0) {
+        throw new RuntimeException('Unable to verify database privileges');
+    }
+}
+
 /** Connect with verified TLS and reject credentials with broader privileges. */
 function deployment_database(array $settings): mysqli {
     if (!extension_loaded('mysqlnd') || !defined('MYSQLI_CLIENT_SSL_VERIFY_SERVER_CERT')) {
@@ -27,18 +43,18 @@ function deployment_database(array $settings): mysqli {
         $connection->close();
         throw new RuntimeException('Unable to verify database privileges');
     }
-    while ($row = $grants->fetch_row()) {
-        $grant = $row[0];
-        // Role grants, global privileges, GRANT OPTION and other databases fail closed.
-        $usage = preg_match('/\AGRANT USAGE ON \*\.\* TO /i', $grant);
-        // TiDB may omit identifier quotes while MySQL emits backticks. Compare
-        // schema names exactly, even when privilege names use mixed case.
-        $scoped = preg_match('/\AGRANT (?:ALL PRIVILEGES|(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|REFERENCES)(?:,\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|INDEX|REFERENCES))*) ON (`[a-zA-Z][a-zA-Z0-9]*`|[a-zA-Z][a-zA-Z0-9]*)\.\* TO /i', $grant, $match)
-            && trim($match[1], '`') === $settings['database'];
-        if ((!$usage && !$scoped) || stripos($grant, 'WITH GRANT OPTION') !== false) {
-            $connection->close();
-            throw new RuntimeException('Database privileges exceed the dedicated application schema');
-        }
+    try {
+        // TiDB may omit identifier quotes. Validate every row, rejecting empty
+        // results, global/role grants, GRANT OPTION and other schemas.
+        $rows = (function () use ($grants) {
+            while ($row = $grants->fetch_row()) {
+                yield $row[0];
+            }
+        })();
+        deployment_verify_grants($rows, $settings['database']);
+    } catch (Throwable $error) {
+        $connection->close();
+        throw $error;
     }
     return $connection;
 }

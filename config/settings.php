@@ -25,7 +25,7 @@ function deployment_settings(): array {
         || in_array(strtolower($database), ['test', 'mysql', 'sys', 'information_schema', 'performance_schema'], true)) {
         throw new RuntimeException('A dedicated application database is required');
     }
-    if (!preg_match('/\A[a-zA-Z][a-zA-Z0-9_]{0,31}_\z/', $prefix) || $prefix === 'wp_') {
+    if (!preg_match('/\A[a-zA-Z][a-zA-Z0-9_]{0,31}_\z/', $prefix) || strtolower($prefix) === 'wp_') {
         throw new RuntimeException('A unique table prefix is required');
     }
     $password = @file_get_contents('/run/secrets/db_password');

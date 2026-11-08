@@ -13,6 +13,8 @@ RUN echo 'aa234d6c8fe89d1c9fea7804d9099d03c5ed4dea106015cb24131d04291fe0dc  /tmp
     && sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf \
     && a2dissite 000-default \
     && a2dismod -f autoindex \
+    && a2disconf remoteip \
+    && a2dismod remoteip \
     && a2enmod headers \
     && rm -f /opt/wordpress/wp-config-docker.php
 COPY config/apache.conf /etc/apache2/sites-enabled/wordpress.conf
@@ -20,7 +22,7 @@ COPY config/php.ini /usr/local/etc/php/conf.d/security.ini
 COPY config/wp-config.php /opt/wordpress/wp-config.php
 COPY config/db.php /opt/wordpress/wp-content/db.php
 COPY config/security-audit.php /opt/wordpress/wp-content/mu-plugins/security-audit.php
-COPY config/settings.php config/db-connection.php config/healthcheck.php /opt/security/
+COPY config/settings.php config/db-connection.php config/healthcheck.php config/audit.php /opt/security/
 COPY scripts/entrypoint.sh /usr/local/bin/security-entrypoint
 RUN chmod 0555 /usr/local/bin/security-entrypoint \
     && printf 'ok\n' > /opt/wordpress/healthz.txt

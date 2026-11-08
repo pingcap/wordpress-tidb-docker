@@ -25,7 +25,8 @@ define('DISABLE_WP_CRON', true);
 define('WP_DEBUG', false);
 define('WP_DEBUG_DISPLAY', false);
 define('WP_DEBUG_LOG', false);
-// Only the HTTPS proxy is published; its upstream header overwrites client input.
+// Apache restricts application HTTP to the proxy's current Docker DNS address;
+// Caddy overwrites the header. Local CLI jobs set HTTPS explicitly when needed.
 if (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https') {
     $_SERVER['HTTPS'] = 'on';
 }

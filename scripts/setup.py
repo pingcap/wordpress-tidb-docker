@@ -19,7 +19,7 @@ def create(path, text, mode):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--rotate-salts', action='store_true', help='invalidate all login sessions')
+    parser.add_argument('--rotate-salts', action='store_true', help='prepare new signing keys; recreate and verify the running service separately')
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     secret_dir = root / 'secrets'
@@ -33,9 +33,13 @@ def main():
         if not salt_file.is_file() or salt_file.is_symlink():
             parser.error('initialize this deployment before rotating its signing keys')
         temp = secret_dir / ('salts-' + secrets.token_hex(8))
-        create(temp, salts, 0o444)
-        os.replace(temp, salt_file)
-        print('Signing keys rotated. Recreate WordPress to remount the new secret; all sessions will expire.')
+        try:
+            create(temp, salts, 0o444)
+            os.replace(temp, salt_file)
+        finally:
+            temp.unlink(missing_ok=True)
+        print('New signing key file prepared; running sessions are NOT yet verified revoked. '
+              'Recreate WordPress, then run python3 scripts/verify-salts.py.')
         return
     if any(path.exists() for path in (root / '.env', salt_file, secret_dir / 'db_password')):
         parser.error('configuration already exists; refusing to overwrite deployment data')
