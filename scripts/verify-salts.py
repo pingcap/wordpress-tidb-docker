@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import stat
+import re
 import subprocess
 import sys
 
@@ -16,7 +17,16 @@ def verify(root):
         raise RuntimeError('Signing keys require a private directory and a regular file')
     if not stat.S_ISREG(salt_file.stat().st_mode):
         raise RuntimeError('Signing keys must be a regular file')
-    expected = hashlib.sha256(salt_file.read_bytes()).hexdigest()
+    content = salt_file.read_bytes()
+    keys = json.loads(content)
+    names = {'AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY',
+             'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT'}
+    if (not isinstance(keys, dict) or set(keys) != names
+            or any(not isinstance(value, str) or not re.fullmatch('[0-9a-f]{128}', value)
+                   for value in keys.values())
+            or len(set(keys.values())) != 8):
+        raise RuntimeError('Prepared signing keys have an invalid format')
+    expected = hashlib.sha256(content).hexdigest()
 
     def run(args, input=None):
         result = subprocess.run(args, cwd=root, input=input, text=True,

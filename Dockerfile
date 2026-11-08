@@ -13,6 +13,8 @@ RUN echo 'aa234d6c8fe89d1c9fea7804d9099d03c5ed4dea106015cb24131d04291fe0dc  /tmp
     && sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf \
     && a2dissite 000-default \
     && a2dismod -f autoindex \
+    && a2disconf remoteip \
+    && a2dismod remoteip \
     && a2enmod headers \
     && rm -f /opt/wordpress/wp-config-docker.php
 COPY config/apache.conf /etc/apache2/sites-enabled/wordpress.conf

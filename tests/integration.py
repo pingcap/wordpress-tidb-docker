@@ -234,7 +234,8 @@ def main():
             # Another backend peer cannot impersonate the proxy using headers.
             direct = dc('exec', '-T', 'wordpress', 'php', '-r',
                 '$c=stream_context_create(["http"=>["ignore_errors"=>true, "header"=>'
-                '"X-Forwarded-Proto: https\\r\\nX-Deployment-Client-IP: 192.0.2.1\\r\\n"]]); '
+                '"X-Forwarded-Proto: https\\r\\nX-Deployment-Client-IP: 192.0.2.1\\r\\n" . '
+                '"X-Forwarded-For: " . gethostbyname("proxy") . "\\r\\n"]]); '
                 '@file_get_contents("http://127.0.0.1:8080/wp-login.php", false, $c); '
                 'if (!str_contains($http_response_header[0] ?? "", "403")) exit(1);')
             for path in ['/xmlrpc.php', '/wp-cron.php', '/wp-config.php', '/healthz.txt', '/wp-content/debug.log']:
