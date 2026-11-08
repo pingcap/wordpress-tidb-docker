@@ -63,8 +63,10 @@ services:
     depends_on:
       database-gateway:
         condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=2m,uid=99,gid=99,mode=0700
     healthcheck:
-      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8404/"]
+      test: [CMD, database-relay-health]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -85,8 +87,10 @@ services:
     environment:
       TIDB_HOST: ${TIDB_HOST:?Set TIDB_HOST}
       TIDB_PORT: ${TIDB_PORT:-4000}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=2m,uid=99,gid=99,mode=0700
     healthcheck:
-      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8404/"]
+      test: [CMD, database-relay-health]
       interval: 5s
       timeout: 3s
       retries: 3

@@ -47,6 +47,7 @@ USER 1000:1000
 FROM haproxy:3.4.7-alpine@sha256:5312d37032c079c4937d45ef63758852434351f3b425a3703521fd999837abcf AS database-relay
 COPY config/db-relay.cfg config/db-gateway.cfg /usr/local/etc/haproxy/
 COPY --chmod=0555 scripts/database-relay.sh /usr/local/bin/database-relay
+COPY --chmod=0555 scripts/database-relay-health.sh /usr/local/bin/database-relay-health
 USER 99:99
 ENTRYPOINT ["database-relay"]
 CMD ["db-relay"]
