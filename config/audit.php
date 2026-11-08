@@ -1,4 +1,5 @@
 <?php
+require_once '/opt/security/security-storage.php';
 // Available before WordPress loads plugins, including failed database connects.
 // Never initialize the current user here: doing so can issue another DB query.
 function deployment_audit(string $event, int $target = 0, array $context = []): void {
@@ -19,7 +20,22 @@ function deployment_audit(string $event, int $target = 0, array $context = []): 
             $record[$field] = $context[$field];
         }
     }
-    error_log(json_encode($record, JSON_UNESCAPED_SLASHES) . PHP_EOL, 3, 'php://stderr');
+    if (isset($context['attempt_count']) && is_int($context['attempt_count'])
+        && $context['attempt_count'] >= 0 && $context['attempt_count'] <= 1000000000) {
+        $record['attempt_count'] = $context['attempt_count'];
+    }
+    $line = json_encode($record, JSON_UNESCAPED_SLASHES) . PHP_EOL;
+    error_log($line, 3, 'php://stderr');
+    if (in_array($event, ['admin_bootstrap', 'login_success', 'logout', 'user_created', 'user_deleted',
+        'role_changed', 'role_added', 'role_removed', 'password_reset', 'role_definitions_created',
+        'role_definitions_changed', 'role_definitions_deleted', 'security_option_created',
+        'security_option_changed', 'security_option_deleted'], true)) {
+        try {
+            deployment_retain_privileged($line);
+        } catch (Throwable $error) {
+            error_log('{"type":"wordpress_security","event":"audit_storage_unavailable"}' . PHP_EOL, 3, 'php://stderr');
+        }
+    }
 }
 
 function deployment_login_context(string $name): array {

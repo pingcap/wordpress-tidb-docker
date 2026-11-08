@@ -1,6 +1,9 @@
 <?php
 /* Plugin Name: Deployment Security Audit */
 require_once '/opt/security/audit.php';
+require_once '/opt/security/login-limits.php';
+// Runs before wp-login.php dispatches authentication or recovery POST actions.
+add_action('login_init', 'deployment_guard_login', 1);
 add_action('wp_install', function ($user) { deployment_audit('admin_bootstrap', (int)$user->ID); });
 add_action('wp_login', function ($name, $user) { deployment_audit('login_success', (int)$user->ID, deployment_login_context($name)); }, 10, 2);
 add_action('wp_login_failed', function ($name) { deployment_audit('login_failure', 0, deployment_login_context($name)); });

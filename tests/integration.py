@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 SOURCE = Path(__file__).resolve().parents[1]
 MYSQL = 'mysql:8.4@sha256:a0225d1ea6631c8bc2385dc4c2faba17bbf1834ecf369e1659a9a382bd8d5dd7'
@@ -45,6 +46,7 @@ def main():
         fixture.mkdir()
         token = 'SENSITIVELOGMARKER' + secrets.token_hex(12)
         (fixture / 'empty-audit.php').write_text('')
+        shutil.copy(SOURCE / 'tests/security-state.php', fixture / 'security-state.php')
         (fixture / 'security-probe.php').write_text(
             '<?php require "/opt/wordpress/wp-load.php"; '
             'if (get_current_user_id() !== 1) { http_response_code(403); exit; } '
@@ -77,9 +79,10 @@ def main():
             output.write('\nFROM wordpress AS wordpress-test\nUSER 0\n'
                          'COPY test-fixtures/ca.crt /usr/local/share/ca-certificates/fixture.crt\n'
                          'COPY test-fixtures/security-probe.php /opt/wordpress/security-probe.php\n'
+                         'COPY test-fixtures/security-state.php /opt/security-state-test.php\n'
                          'RUN update-ca-certificates\nUSER 33:33\n')
         with (root / '.dockerignore').open('a') as output:
-            output.write('\n!test-fixtures/\n!test-fixtures/ca.crt\n!test-fixtures/security-probe.php\n')
+            output.write('\n!test-fixtures/\n!test-fixtures/ca.crt\n!test-fixtures/security-probe.php\n!test-fixtures/security-state.php\n')
         override = {
             'services': {
                 'wordpress': {'build': {'target': 'wordpress-test'}},
@@ -138,6 +141,9 @@ def main():
             else:
                 raise AssertionError('Fixture did not become available: ' + result.stderr)
             print('Verified TLS database connection succeeds.', flush=True)
+            state_tests = dc('exec', '-T', 'wordpress', 'php', '/opt/security-state-test.php')
+            assert 'concurrency passed' in state_tests.stdout
+            print(state_tests.stdout.strip(), flush=True)
             connect('-e', 'TIDB_HOST=wrongdb', expect=False)
             result = dc('run', '--rm', '--no-deps', '--volume',
                         str(fixture / 'untrusted.crt') + ':/etc/ssl/certs/ca-certificates.crt:ro',
@@ -316,8 +322,85 @@ def main():
             with opener.open('https://localhost:8443/wp-login.php', data=login_data, timeout=10):
                 pass
             assert b'wp-admin-bar-logout' in request('/wp-admin/')[1], 'New login failed after rotation'
+
+            def private_php(code):
+                return dc('exec', '-T', 'wordpress', 'php', '-r', code).stdout
+
+            private_php('file_put_contents("/var/lib/wordpress-security/login.json", "");')
+            audit_before = private_php('echo hash_file("sha256", "/var/lib/wordpress-security/privileged.jsonl");')
+
+            def login_attempt(name='fixture-rate-account', spoof='192.0.2.123', supplied_password=token):
+                # Each request has an independent cookie jar/connection. The
+                # supplied source headers must not select a different budget.
+                client = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                            urllib.request.HTTPSHandler(context=context))
+                data = urllib.parse.urlencode({'log': name, 'pwd': supplied_password, 'testcookie': '1'}).encode()
+                req = urllib.request.Request('https://localhost:8443/wp-login.php', data=data,
+                    headers={'X-Deployment-Client-IP': spoof, 'X-Forwarded-For': spoof})
+                try:
+                    response = client.open(req, timeout=10)
+                except urllib.error.HTTPError as error:
+                    response = error
+                with response:
+                    return response.status, dict(response.headers), response.read()
+
+            with ThreadPoolExecutor(max_workers=12) as pool:
+                attempts = list(pool.map(lambda i: login_attempt(spoof=f'192.0.2.{i+1}'), range(12)))
+            assert sum(status == 200 for status, _, _ in attempts) == 5, 'Shared HTTP account limit not atomic'
+            assert sum(status == 429 for status, _, _ in attempts) == 7, 'Concurrent attempts escaped throttling'
+            for status, headers, body in attempts:
+                if status == 429:
+                    assert 1 <= int(headers['Retry-After']) <= 60
+                    assert 'no-store' in headers['Cache-Control']
+                    assert token.encode() not in body
+            for alias in ['FIXTURE-RATE-ACCOUNT', '<b>fixture-rate-account</b>']:
+                assert login_attempt(alias)[0] == 429, 'Normalized identifier bypassed its budget'
+            assert login_attempt('x' * 257)[0] == 400, 'Oversized identifier accepted'
+            for i in range(15):
+                assert login_attempt(f'fixture-other-account-{i}')[0] == 200
+            assert login_attempt('fixtureadmin', supplied_password=admin_password)[0] == 429, 'Correct password bypassed source admission'
+            assert private_php('echo hash_file("sha256", "/var/lib/wordpress-security/privileged.jsonl");') == audit_before, 'Anonymous noise altered privileged audit retention'
+
+            state_before = private_php('echo file_get_contents("/var/lib/wordpress-security/login.json");')
+            dc('up', '-d', '--no-deps', '--force-recreate', 'wordpress')
+            for attempt in range(45):
+                if dc('exec', '-T', 'wordpress', 'php', '/opt/security/healthcheck.php', check=False).returncode == 0:
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError('WordPress unavailable after security-state persistence check')
+            assert private_php('echo file_get_contents("/var/lib/wordpress-security/login.json");') == state_before, 'Recreate reset login budgets'
+            assert private_php('echo hash_file("sha256", "/var/lib/wordpress-security/privileged.jsonl");') == audit_before, 'Recreate lost retained audit'
+
+            private_php('file_put_contents("/var/lib/wordpress-security/login.json", "{broken");')
+            unavailable = login_attempt('fixtureadmin', supplied_password=admin_password)
+            assert unavailable[0] == 503 and b'Login is temporarily unavailable' in unavailable[2], 'Broken state did not refuse authentication'
+            assert token.encode() not in unavailable[2] and password.encode() not in unavailable[2]
+            # Only this disposable test's state is aged; production has no clock
+            # override or reset endpoint. Verify real HTTP recovery after expiry.
+            saved_state = json.loads(state_before)
+            saved_state['window'] = int(time.time()) - 61
+            dc('exec', '-T', 'wordpress', 'php', '-r',
+               'file_put_contents("/var/lib/wordpress-security/login.json", stream_get_contents(STDIN));',
+               input=json.dumps(saved_state, separators=(',', ':')))
+            cookies.clear()
+            request('/wp-login.php')
+            with opener.open('https://localhost:8443/wp-login.php', data=login_data, timeout=10):
+                pass
+            assert b'wp-admin-bar-logout' in request('/wp-admin/')[1], 'Login did not recover after expiry'
+            protected = private_php('echo file_get_contents("/var/lib/wordpress-security/privileged.jsonl");')
+            assert 'role_definitions_changed' in protected and 'login_success' in protected
+            assert 'login_failure' not in protected and 'login_rate_limited' not in protected
+            assert token not in protected and admin_password not in protected and password not in protected
+            private_php('foreach (["/var/lib/wordpress-security"=>0700, '
+                        '"/var/lib/wordpress-security/login.json"=>0600, '
+                        '"/var/lib/wordpress-security/privileged.jsonl"=>0600] as $path=>$mode) '
+                        '{ if ((fileperms($path)&0777)!==$mode || fileowner($path)!==33) exit(1); }')
+            final_logs = dc('logs', '--no-color', 'wordpress').stdout
+            assert 'login_throttle_summary' in final_logs and 'audit_storage_unavailable' not in final_logs
             print('Installation, reconnect, HTTPS, immutable code, uploads, audit redaction and loopback binding passed.', flush=True)
             print('Web DB audit, role definitions, proxy attribution, symlinks and live session revocation passed.', flush=True)
+            print('Concurrent HTTP login limits, source spoofing, expiry, fail-closed storage and independent audit retention passed.', flush=True)
         except BaseException:
             print(dc('ps', '--all', check=False).stdout, flush=True)
             print(dc('logs', '--no-color', '--tail', '80', 'proxy', 'tidb', check=False).stdout, flush=True)
