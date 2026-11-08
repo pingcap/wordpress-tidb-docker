@@ -43,5 +43,6 @@ https://localhost:8443 {
     respond @blocked 403
     reverse_proxy wordpress:8080 {
         header_up X-Forwarded-Proto https
+        header_up X-Deployment-Client-IP {remote_host}
     }
 }

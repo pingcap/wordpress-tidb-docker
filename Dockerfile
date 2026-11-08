@@ -20,7 +20,7 @@ COPY config/php.ini /usr/local/etc/php/conf.d/security.ini
 COPY config/wp-config.php /opt/wordpress/wp-config.php
 COPY config/db.php /opt/wordpress/wp-content/db.php
 COPY config/security-audit.php /opt/wordpress/wp-content/mu-plugins/security-audit.php
-COPY config/settings.php config/db-connection.php config/healthcheck.php /opt/security/
+COPY config/settings.php config/db-connection.php config/healthcheck.php config/audit.php /opt/security/
 COPY scripts/entrypoint.sh /usr/local/bin/security-entrypoint
 RUN chmod 0555 /usr/local/bin/security-entrypoint \
     && printf 'ok\n' > /opt/wordpress/healthz.txt
